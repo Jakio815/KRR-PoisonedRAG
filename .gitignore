@@ -161,3 +161,17 @@ cython_debug/
 
 datasets
 logs
+results/
+venv_clean/
+
+# Temporary and generated files
+NEW_ATTACKS_IMPLEMENTATION_SUMMARY.txt
+GETTING_STARTED.txt
+new_attacks_summary.py
+getting_started.py
+test_gpt4.py
+manual_test.py
+
+# API configuration files with secrets
+model_configs/gpt4_config.json
+model_configs/palm2_config.json
