@@ -99,7 +99,12 @@ class Attacker():
      
 
     def hotflip(self, target_queries, adv_b=None, **kwargs) -> list:
-        device = 'cuda'
+        if torch.cuda.is_available():
+            device = 'cuda'
+        elif torch.backends.mps.is_available():
+            device = 'mps'
+        else:
+            device = 'cpu'
         print('Doing HotFlip attack!')
         adv_text_groups = []
         for query_score in tqdm(target_queries):
@@ -128,7 +133,7 @@ class Attacker():
                 adv_passage_token_type = torch.zeros_like(adv_passage_ids, device=device)  
 
                 q_sent = self.tokenizer(query, max_length=self.max_seq_length, truncation=True, padding="max_length" if self.pad_to_max_length else False, return_tensors="pt")
-                q_sent = {key: value.cuda() for key, value in q_sent.items()}
+                q_sent = {key: value.to(device) for key, value in q_sent.items()}
                 q_emb = self.get_emb(self.model, q_sent).detach()            
                 
                 for it_ in range(self.num_iter):
