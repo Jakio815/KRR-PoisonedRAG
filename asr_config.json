@@ -1,0 +1,123 @@
+{
+  "evaluation_scenarios": {
+    "quick_eval": {
+      "description": "Quick evaluation for testing (2 target questions, 2 repeats)",
+      "datasets": ["nq"],
+      "attack_methods": [null, "corpus_poisoning", "prompt_injection"],
+      "num_target_questions": 2,
+      "num_repeats": 2,
+      "runtime_estimate": "~5 minutes"
+    },
+    "standard_eval": {
+      "description": "Standard evaluation following paper (10 targets, 10 repeats, 3 datasets)",
+      "datasets": ["nq", "hotpotqa", "msmarco"],
+      "attack_methods": [null, "corpus_poisoning", "prompt_injection", "LM_targeted"],
+      "num_target_questions": 10,
+      "num_repeats": 10,
+      "runtime_estimate": "~16 hours"
+    },
+    "extended_eval": {
+      "description": "Extended evaluation for statistically robust results (20 targets, 20 repeats)",
+      "datasets": ["nq", "hotpotqa", "msmarco"],
+      "attack_methods": [null, "corpus_poisoning", "prompt_injection", "LM_targeted"],
+      "num_target_questions": 20,
+      "num_repeats": 20,
+      "runtime_estimate": "~64 hours"
+    },
+    "defense_eval": {
+      "description": "Evaluate effectiveness of defenses against attacks",
+      "datasets": ["nq", "hotpotqa", "msmarco"],
+      "attack_methods": ["corpus_poisoning", "prompt_injection"],
+      "num_target_questions": 10,
+      "num_repeats": 10,
+      "apply_defense": true,
+      "defense_types": ["semantic_similarity", "diversity", "weighted_rank"],
+      "runtime_estimate": "~24 hours"
+    }
+  },
+  "model_configs": {
+    "llm": {
+      "provider": "palm2",
+      "model": "gemini-2.5-flash",
+      "temperature": 0,
+      "max_tokens": 800
+    },
+    "retriever": {
+      "model": "contriever",
+      "embedding_dim": 768,
+      "top_k": 5
+    }
+  },
+  "attack_configs": {
+    "corpus_poisoning": {
+      "embedding_method": "contriever",
+      "injection_level": "embedding",
+      "effectiveness_expected": "70-85%",
+      "target_answer_incorporation": "via_poisoned_corpus"
+    },
+    "prompt_injection": {
+      "num_templates": 5,
+      "injection_level": "instruction",
+      "effectiveness_expected": "80-90%",
+      "target_answer_incorporation": "via_instructions"
+    },
+    "LM_targeted": {
+      "method": "learned_adversarial_texts",
+      "injection_level": "retrieval",
+      "effectiveness_expected": "70-80%",
+      "target_answer_incorporation": "via_documents"
+    }
+  },
+  "evaluation_params": {
+    "base_seed": 42,
+    "gpu_id": 0,
+    "batch_size": 64,
+    "num_workers": 4,
+    "timeout_per_run": 300,
+    "output_dir": "results/asr_evaluation"
+  },
+  "expected_results": {
+    "nq": {
+      "no_attack": "0.20-0.30",
+      "corpus_poisoning": "0.75-0.85",
+      "prompt_injection": "0.80-0.90",
+      "LM_targeted": "0.70-0.80"
+    },
+    "hotpotqa": {
+      "no_attack": "0.15-0.25",
+      "corpus_poisoning": "0.70-0.80",
+      "prompt_injection": "0.75-0.85",
+      "LM_targeted": "0.65-0.75"
+    },
+    "msmarco": {
+      "no_attack": "0.10-0.20",
+      "corpus_poisoning": "0.65-0.75",
+      "prompt_injection": "0.70-0.80",
+      "LM_targeted": "0.60-0.70"
+    }
+  },
+  "analysis_metrics": {
+    "primary": {
+      "Attack Success Rate (ASR)": "Main metric - fraction of successful attacks",
+      "Mean ASR": "Average across all repeats",
+      "Std Dev": "Standard deviation (reproducibility measure)"
+    },
+    "secondary": {
+      "Retrieval Success": "% of poisoned docs in top-k",
+      "Precision": "True positives / (True positives + False positives)",
+      "Recall": "Poisoned docs retrieved / Total poisoned docs",
+      "F1 Score": "Harmonic mean of precision and recall"
+    },
+    "comparative": {
+      "ASR Improvement": "(Attack ASR - Baseline ASR) / Baseline ASR",
+      "Method Comparison": "Relative effectiveness across attack methods",
+      "Dataset Difficulty": "Variation in ASR across datasets"
+    }
+  },
+  "output_structure": {
+    "detailed_results": "results/query_results/asr_eval/[method]_[dataset]_repeat[idx].json",
+    "summary": "results/asr_evaluation/asr_summary.json",
+    "plots": "results/asr_evaluation/plots/*.png",
+    "report": "results/asr_evaluation/ASR_Report.md"
+  }
+}

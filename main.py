@@ -10,7 +10,9 @@ from src.utils import save_results, load_json, setup_seeds, clean_str, f1_score
 from src.attack import Attacker
 from src.prompts import wrap_prompt
 import torch
-
+import sys
+import io
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
 
 def parse_args():
@@ -45,8 +47,13 @@ def parse_args():
 
 def main():
     args = parse_args()
-    torch.cuda.set_device(args.gpu_id)
-    device = 'cuda'
+    if torch.cuda.is_available():
+        torch.cuda.set_device(args.gpu_id)
+        device = 'cuda'
+    else:
+        device = 'cpu'
+        print("CUDA is not available. Using CPU instead.")
+    
     setup_seeds(args.seed)
     if args.model_config_path == None:
         args.model_config_path = f'model_configs/{args.model_name}_config.json'
@@ -107,7 +114,7 @@ def main():
             adv_text_list = sum(adv_text_groups, []) # convert 2D array to 1D array
 
             adv_input = tokenizer(adv_text_list, padding=True, truncation=True, return_tensors="pt")
-            adv_input = {key: value.cuda() for key, value in adv_input.items()}
+            adv_input = {key: value.to(device) for key, value in adv_input.items()}
             with torch.no_grad():
                 adv_embs = get_emb(c_model, adv_input)        
                       
@@ -119,7 +126,7 @@ def main():
             iter_idx = i - iter * args.M # iter index
             print(f'############# Target Question: {iter_idx+1}/{args.M} #############')
             question = incorrect_answers[i]['question']
-            print(f'Question: {question}\n') 
+            print(f'Question: {question}\n')
             
             gt_ids = list(qrels[incorrect_answers[i]['id']].keys())
             ground_truth = [corpus[id]["text"] for id in gt_ids]
@@ -143,7 +150,7 @@ def main():
 
                 if args.attack_method not in [None, 'None']: 
                     query_input = tokenizer(question, padding=True, truncation=True, return_tensors="pt")
-                    query_input = {key: value.cuda() for key, value in query_input.items()}
+                    query_input = {key: value.to(device) for key, value in query_input.items()}
                     with torch.no_grad():
                         query_emb = get_emb(model, query_input) 
                     for j in range(len(adv_text_list)):
