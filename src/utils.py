@@ -131,6 +131,12 @@ def f1_score(precision, recall):
     Returns:
     np.array: A 2D array of F1 scores.
     """
-    f1_scores = np.divide(2 * precision * recall, precision + recall, where=(precision + recall) != 0)
+    denominator = precision + recall
+    f1_scores = np.divide(
+        2 * precision * recall,
+        denominator,
+        out=np.zeros_like(denominator, dtype=float),
+        where=denominator != 0
+    )
     
     return f1_scores

@@ -163,6 +163,9 @@ datasets
 logs
 results/
 venv_clean/
+.envs/
+.cache/
+hpc/sol/sol.env
 
 # Temporary and generated files
 NEW_ATTACKS_IMPLEMENTATION_SUMMARY.txt

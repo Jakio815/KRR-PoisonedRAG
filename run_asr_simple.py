@@ -1,147 +1,233 @@
 """
-Simple ASR Evaluation Runner
-Follows PoisonedRAG paper methodology:
-- 10 randomly selected close-ended questions per dataset
-- 10 repeats (accounting for non-determinism)
-- Compare ASR: No attack vs Corpus Poisoning vs Prompt Injection
+Optimized ASR evaluation runner.
+
+Runs one `main.py` process per (dataset, attack_method) pair, with repeats handled inside
+`main.py` to avoid expensive process/model/dataset reloading for each repeat.
 """
 
-import os
-import sys
+import argparse
 import json
+import os
 import subprocess
+import sys
+import time
 from collections import defaultdict
+
 import numpy as np
 
 
-def run_evaluation(dataset, attack_method, num_questions=10, num_repeats=10):
-    """
-    Run evaluation and collect ASR for all repeats
-    
-    Attack methods:
-    - None: No attack (baseline)
-    - 'corpus_poisoning': Corpus poisoning attack
-    - 'prompt_injection': Prompt injection attack
-    - 'LM_targeted': Original PoisonedRAG attack
-    """
-    
-    print(f"\n{'='*80}")
-    print(f"Evaluating {dataset} with {attack_method if attack_method else 'NO ATTACK'}")
-    print(f"{'='*80}")
-    
-    asr_list = []
-    
-    for repeat_idx in range(num_repeats):
-        print(f"\nRepeat {repeat_idx + 1}/{num_repeats}...")
-        
-        # Build command for main.py
-        attack_arg = f"--attack_method {attack_method}" if attack_method else "--attack_method None"
-        
-        cmd = (
-            f"python main.py "
-            f"--eval_model_code contriever "
-            f"--eval_dataset {dataset} "
-            f"--split test "
-            f"--query_results_dir asr_eval "
-            f"--model_name palm2 "
-            f"--use_truth False "
-            f"--top_k 5 "
-            f"--gpu_id 0 "
-            f"{attack_arg} "
-            f"--adv_per_query 5 "
-            f"--score_function dot "
-            f"--repeat_times 1 "
-            f"--M {num_questions} "
-            f"--seed {42 + repeat_idx} "
-            f"--name asr_{dataset}_{attack_method or 'no_attack'}_repeat{repeat_idx}"
-        )
-        
-        print(f"Running: {cmd}")
-        
-        # Execute
-        result = os.system(cmd)
-        
-        if result == 0:
-            print(f"✓ Repeat {repeat_idx + 1} completed")
-        else:
-            print(f"✗ Repeat {repeat_idx + 1} failed")
-    
-    return asr_list
+ATTACK_CONFIGS = [
+    ("no_attack", None),
+    ("poisoned_rag", "LM_targeted"),
+    ("corpus_poisoning", "corpus_poisoning"),
+    ("prompt_injection", "prompt_injection"),
+]
+
+
+def str2bool(value):
+    return str(value).strip().lower() in {"1", "true", "t", "yes", "y"}
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Run ASR evaluation quickly and reliably.")
+    parser.add_argument("--datasets", nargs="+", default=["nq", "hotpotqa", "msmarco"])
+    parser.add_argument("--num_questions", type=int, default=10)
+    parser.add_argument("--num_repeats", type=int, default=10)
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--model_name", type=str, default="palm2")
+    parser.add_argument("--model_config_path", type=str, default=None)
+    parser.add_argument("--eval_model_code", type=str, default="contriever")
+    parser.add_argument("--top_k", type=int, default=5)
+    parser.add_argument("--adv_per_query", type=int, default=5)
+    parser.add_argument("--score_function", type=str, default="dot", choices=["dot", "cos_sim"])
+    parser.add_argument("--gpu_id", type=int, default=0)
+    parser.add_argument("--query_results_dir", type=str, default="asr_eval")
+    parser.add_argument("--output_dir", type=str, default="results/asr_evaluation")
+    parser.add_argument("--random_targets", type=str, default="True")
+    parser.add_argument("--reuse_targets_per_repeat", type=str, default="True")
+    parser.add_argument("--resume", type=str, default="True")
+    parser.add_argument("--timeout_sec", type=int, default=0, help="0 means no timeout")
+    parser.add_argument("--python_exec", type=str, default=sys.executable)
+    return parser.parse_args()
+
+
+def run_single_experiment(args, dataset, method_name, attack_method, run_summary_path):
+    run_name = f"asr_{dataset}_{method_name}"
+
+    cmd = [
+        args.python_exec,
+        "main.py",
+        "--eval_model_code", args.eval_model_code,
+        "--eval_dataset", dataset,
+        "--split", "test",
+        "--query_results_dir", args.query_results_dir,
+        "--model_name", args.model_name,
+        "--use_truth", "False",
+        "--top_k", str(args.top_k),
+        "--gpu_id", str(args.gpu_id),
+        "--attack_method", attack_method if attack_method is not None else "None",
+        "--adv_per_query", str(args.adv_per_query),
+        "--score_function", args.score_function,
+        "--repeat_times", str(args.num_repeats),
+        "--M", str(args.num_questions),
+        "--seed", str(args.seed),
+        "--random_targets", str(args.random_targets),
+        "--reuse_targets_per_repeat", str(args.reuse_targets_per_repeat),
+        "--save_every_iter", "False",
+        "--summary_output", run_summary_path,
+        "--name", run_name,
+    ]
+
+    if args.model_config_path:
+        cmd.extend(["--model_config_path", args.model_config_path])
+
+    start = time.time()
+    timeout = args.timeout_sec if args.timeout_sec > 0 else None
+    completed = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    elapsed = time.time() - start
+
+    return completed, elapsed, run_name
+
+
+def summary_matches_args(summary, args, dataset, attack_method):
+    expected_attack = attack_method if attack_method is not None else "None"
+    checks = [
+        summary.get("dataset") == dataset,
+        summary.get("attack_method") == expected_attack,
+        int(summary.get("M", -1)) == args.num_questions,
+        int(summary.get("repeat_times", -1)) == args.num_repeats,
+        int(summary.get("top_k", -1)) == args.top_k,
+        int(summary.get("adv_per_query", -1)) == args.adv_per_query,
+        str(summary.get("random_targets")) == str(args.random_targets),
+        str(summary.get("reuse_targets_per_repeat")) == str(args.reuse_targets_per_repeat),
+    ]
+    return all(checks)
+
+
+def print_table(results_summary, attack_order, datasets):
+    print("\n" + "=" * 110)
+    print("ASR COMPARISON TABLE")
+    print("=" * 110)
+
+    header = f"{'Attack Method':<20} | " + " | ".join(f"{d.upper():<24}" for d in datasets)
+    print(header)
+    print("-" * len(header))
+
+    for method_name, _ in attack_order:
+        row = f"{method_name:<20} | "
+        chunks = []
+        for dataset in datasets:
+            stats = results_summary.get(dataset, {}).get(method_name)
+            if stats is None:
+                chunks.append(f"{'N/A':<24}")
+            else:
+                chunks.append(f"{stats['mean']:.2%} +/- {stats['std']:.2%}")
+        row += " | ".join(chunks)
+        print(row)
 
 
 def main():
-    """Run ASR evaluation following paper methodology"""
-    
-    datasets = ['nq', 'hotpotqa', 'msmarco']
-    
-    # Attack methods to compare
-    attack_configs = [
-        ('No Attack (Baseline)', None),
-        ('PoisonedRAG', 'LM_targeted'),
-        ('Corpus Poisoning', 'corpus_poisoning'),
-        ('Prompt Injection', 'prompt_injection'),
-    ]
-    
-    results = defaultdict(lambda: defaultdict(list))
-    
-    print("\n" + "="*80)
-    print("ASR EVALUATION - Following PoisonedRAG Paper")
-    print("="*80)
-    print("Configuration:")
-    print(f"  - Datasets: {', '.join(datasets)}")
-    print(f"  - Attack Methods: {', '.join([name for name, _ in attack_configs])}")
-    print(f"  - Target Questions: 10 per dataset")
-    print(f"  - Repeats: 10 (for non-determinism)")
-    print("="*80 + "\n")
-    
-    for dataset in datasets:
-        print(f"\n{'#'*80}")
-        print(f"Dataset: {dataset.upper()}")
-        print(f"{'#'*80}")
-        
-        for attack_name, attack_method in attack_configs:
-            print(f"\n{'-'*80}")
-            print(f"Attack: {attack_name}")
-            print(f"{'-'*80}")
-            
-            # Run evaluation (10 repeats)
-            asr_list = run_evaluation(
-                dataset=dataset,
-                attack_method=attack_method,
-                num_questions=10,
-                num_repeats=10
-            )
-            
-            results[dataset][attack_name] = asr_list
-    
-    print("\n\n" + "="*80)
-    print("FINAL ASR RESULTS")
-    print("="*80 + "\n")
-    
-    # Print comparison table
-    print(f"{'Attack Method':<30} | {'NQ':<20} | {'HotpotQA':<20} | {'MSMARCO':<20}")
-    print("-" * 95)
-    
-    for attack_name, _ in attack_configs:
-        row = f"{attack_name:<30} | "
-        for dataset in datasets:
-            if attack_name in results[dataset]:
-                asr_vals = results[dataset][attack_name]
-                if asr_vals:
-                    mean = np.mean(asr_vals)
-                    std = np.std(asr_vals)
-                    row += f"{mean:.2%} ± {std:.2%}         | "
+    args = parse_args()
+    resume = str2bool(args.resume)
+
+    os.makedirs(args.output_dir, exist_ok=True)
+    runs_dir = os.path.join(args.output_dir, "runs")
+    logs_dir = os.path.join(args.output_dir, "logs")
+    os.makedirs(runs_dir, exist_ok=True)
+    os.makedirs(logs_dir, exist_ok=True)
+
+    results_summary = defaultdict(dict)
+
+    total_runs = len(args.datasets) * len(ATTACK_CONFIGS)
+    run_counter = 0
+
+    print("\n" + "=" * 90)
+    print("ASR EVALUATION (OPTIMIZED)")
+    print("=" * 90)
+    print(f"Datasets: {args.datasets}")
+    print(f"Attacks: {[name for name, _ in ATTACK_CONFIGS]}")
+    print(f"Questions per dataset: {args.num_questions}")
+    print(f"Repeats per method: {args.num_repeats}")
+    print(f"Total runs: {total_runs} (one run per dataset+method)")
+    print("=" * 90)
+
+    for dataset in args.datasets:
+        print(f"\n{'#' * 90}")
+        print(f"DATASET: {dataset.upper()}")
+        print(f"{'#' * 90}")
+
+        for method_name, attack_method in ATTACK_CONFIGS:
+            run_counter += 1
+            run_summary_path = os.path.join(runs_dir, f"asr_{dataset}_{method_name}.json")
+
+            print(f"\n[{run_counter}/{total_runs}] Method: {method_name}")
+
+            run_summary = None
+            if resume and os.path.exists(run_summary_path):
+                with open(run_summary_path, "r", encoding="utf-8") as f:
+                    candidate_summary = json.load(f)
+                if summary_matches_args(candidate_summary, args, dataset, attack_method):
+                    run_summary = candidate_summary
+                    print("Using existing run summary (resume=True).")
                 else:
-                    row += f"{'N/A':<20} | "
-            else:
-                row += f"{'N/A':<20} | "
-        print(row)
-    
-    print("\n" + "="*80)
-    print("Evaluation Complete!")
-    print("Results saved in: results/query_results/asr_eval/")
-    print("="*80)
+                    print("Existing summary parameters do not match current run; re-running.")
+
+            if run_summary is None:
+                completed, elapsed, run_name = run_single_experiment(
+                    args=args,
+                    dataset=dataset,
+                    method_name=method_name,
+                    attack_method=attack_method,
+                    run_summary_path=run_summary_path,
+                )
+
+                log_prefix = os.path.join(logs_dir, run_name)
+                with open(f"{log_prefix}.stdout.log", "w", encoding="utf-8") as f:
+                    f.write(completed.stdout or "")
+                with open(f"{log_prefix}.stderr.log", "w", encoding="utf-8") as f:
+                    f.write(completed.stderr or "")
+
+                if completed.returncode != 0:
+                    print(f"Run failed (exit={completed.returncode}) after {elapsed / 60:.1f} min.")
+                    print(f"See logs: {log_prefix}.stdout.log / {log_prefix}.stderr.log")
+                    raise RuntimeError(f"Failed run for dataset={dataset}, method={method_name}")
+
+                if not os.path.exists(run_summary_path):
+                    raise FileNotFoundError(f"Expected summary missing: {run_summary_path}")
+
+                with open(run_summary_path, "r", encoding="utf-8") as f:
+                    run_summary = json.load(f)
+
+                print(f"Completed in {elapsed / 60:.1f} min.")
+
+            asr_values = run_summary.get("asr_per_repeat", [])
+            if not asr_values:
+                raise ValueError(f"No ASR values found in {run_summary_path}")
+
+            asr_values_np = np.array(asr_values, dtype=float)
+            stats = {
+                "values": asr_values_np.tolist(),
+                "mean": float(np.mean(asr_values_np)),
+                "std": float(np.std(asr_values_np)),
+                "min": float(np.min(asr_values_np)),
+                "max": float(np.max(asr_values_np)),
+            }
+            results_summary[dataset][method_name] = stats
+
+            print(
+                f"ASR: {stats['mean']:.2%} +/- {stats['std']:.2%} "
+                f"(range {stats['min']:.2%} to {stats['max']:.2%})"
+            )
+
+    summary_path = os.path.join(args.output_dir, "asr_summary.json")
+    with open(summary_path, "w", encoding="utf-8") as f:
+        json.dump(results_summary, f, indent=2)
+
+    print_table(results_summary, ATTACK_CONFIGS, args.datasets)
+    print(f"\nSaved summary to: {summary_path}")
+    print(f"Run summaries: {runs_dir}")
+    print(f"Execution logs: {logs_dir}")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

@@ -94,6 +94,17 @@ python run.py
 ### 🐱 Your own dataset
 If you want to perform experiments on your own dataset, you could refer to **evaluate_beir.py**, prepare your dataset as the beir format and use this file to compute the retrieval scores.
 
+### 🖥️ ASU Sol Supercomputer
+If you want to run this repository on ASU Sol with Slurm, use:
+
+```bash
+bash hpc/sol/quickstart.sh
+```
+
+Detailed Sol instructions are in:
+
+`hpc/sol/README_SOL.md`
+
 ## Acknowledgement
 
 * Our code used the implementation of [corpus-poisoning](https://github.com/princeton-nlp/corpus-poisoning).

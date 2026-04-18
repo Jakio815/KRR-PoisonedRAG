@@ -1,7 +1,7 @@
 {
     "model_info":{
         "provider":"palm2",
-        "name":"models/text-bison-001"
+        "name":"gemini-2.5-flash"
     },
     "api_key_info":{
         "api_keys":[
@@ -13,6 +13,8 @@
         "temperature":0,
         "seed":100,
         "gpus":[],
-        "max_output_tokens":800
+        "max_output_tokens":800,
+        "max_retries":2,
+        "retry_wait_sec":5
     }
 }

@@ -1,0 +1,10 @@
+beir
+sentence-transformers
+transformers>=4.40
+google-genai
+openai
+tqdm
+numpy
+scipy
+scikit-learn
+fschat
